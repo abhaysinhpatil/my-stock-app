@@ -9,7 +9,7 @@ import feedparser
 from textblob import TextBlob
 
 # 1. Page Configuration
-st.set_page_config(page_title="Universal AI Stock Terminal V2", layout="wide")
+st.set_page_config(page_title="Pro AI Stock Terminal", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: white; }
@@ -21,10 +21,11 @@ st.title("🛡 Pro AI Stock Terminal (Ultimate Edition)")
 
 # 2. Sidebar Search Logic
 st.sidebar.title("🔍 Search Stock")
-common_stocks = ["Select...", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ZOMATO.NS", "TATAMOTORS.NS", "AAPL", "NVDA"]
+common_stocks = ["Select...", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ZOMATO.NS", "TATAMOTORS.NS", "SBIN.NS", "AAPL", "NVDA"]
 selected_from_list = st.sidebar.selectbox("Quick Selection:", options=common_stocks)
 custom_ticker = st.sidebar.text_input("OR Type Name (e.g. MRF, TITAN):").upper()
 
+# Intelligent Ticker Logic
 if custom_ticker:
     selected_stock = custom_ticker + ".NS" if "." not in custom_ticker else custom_ticker
 elif selected_from_list != "Select...":
@@ -35,9 +36,10 @@ else:
 n_years = st.sidebar.slider("Prediction Period (Years):", 1, 5)
 
 # 3. Data Loading (Stability Fix)
-@st.cache_data
+@st.cache_data(ttl=3600) # १ तास डेटा कॅश राहील
 def load_data(ticker):
     try:
+        # auto_adjust आणि threads=False मुळे Cloud वर स्थिरता वाढते
         data = yf.download(ticker, start="2015-01-01", auto_adjust=True, threads=False)
         if data.empty: return None
         data.reset_index(inplace=True)
@@ -48,22 +50,30 @@ def load_data(ticker):
 data = load_data(selected_stock)
 
 if data is None:
-    st.error(f"❌ '{selected_stock}' सापडला नाही!")
+    st.error(f"❌ '{selected_stock}' सापडला नाही! कृपया स्पेलिंग तपासा.")
 else:
-    # 4. Financial Ratios (BUG FIX: try-except added to prevent RateLimitError)
-    ticker_obj = yf.Ticker(selected_stock)
+    # 4. Financial Metrics (SAFE FETCHING to avoid N/A)
     curr_price = float(data['Close'].iloc[-1])
+    ticker_obj = yf.Ticker(selected_stock)
     
+    # Rate Limit एरर टाळण्यासाठी सुरक्षित पद्धत
     try:
-        info = ticker_obj.info
+        fast_info = ticker_obj.fast_info
+        m_cap = fast_info.get('market_cap', 'N/A')
     except:
-        info = {} # Rate limit आल्यास रिकामी डिक्शनरी देईल जेणेकरून ॲप चालू राहील
+        m_cap = 'N/A'
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Current Price", f"{curr_price:.2f}")
-    col2.metric("Market Cap", f"{info.get('marketCap', 'N/A')}")
-    col3.metric("P/E Ratio", info.get('trailingPE', 'N/A'))
-    col4.metric("Debt-to-Equity", info.get('debtToEquity', 'N/A'))
+    
+    # Market Cap Display Logic
+    if isinstance(m_cap, (int, float)):
+        col2.metric("Market Cap", f"{m_cap:,.0f}")
+    else:
+        col2.metric("Market Cap", "N/A (Limit)")
+        
+    col3.metric("52W High", f"{data['Close'].max():.2f}")
+    col4.metric("52W Low", f"{data['Close'].min():.2f}")
 
     # 5. Technical Signals
     delta = data['Close'].diff()
@@ -79,14 +89,14 @@ else:
         if last_rsi > 70: st.error(f"🎯 SIGNAL: SELL (RSI: {last_rsi:.2f})")
         elif last_rsi < 30: st.success(f"🎯 SIGNAL: BUY (RSI: {last_rsi:.2f})")
         else: st.info(f"🎯 SIGNAL: HOLD (RSI: {last_rsi:.2f})")
-    
     with c2:
         volatility = data['Close'].tail(30).pct_change().std() * 100
         st.warning(f"⚠ Risk Assessment: {'HIGH' if volatility > 1.5 else 'LOW'} ({volatility:.2f}%)")
 
-    # 6. Advanced Chart
+    # 6. Advanced Chart: Price + EMA + Volume
     data['EMA50'] = data['Close'].ewm(span=50, adjust=False).mean()
     data['EMA200'] = data['Close'].ewm(span=200, adjust=False).mean()
+    
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
     fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], name="Price", line=dict(color='#00d1ff')), row=1, col=1)
     fig.add_trace(go.Scatter(x=data['Date'], y=data['EMA50'], name="EMA 50", line=dict(color='yellow')), row=1, col=1)
@@ -111,5 +121,5 @@ else:
     feed = feedparser.parse(f"https://news.google.com/rss/search?q={selected_stock}+stock&hl=en-IN")
     for entry in feed.entries[:3]:
         analysis = TextBlob(entry.title)
-        icon = "🟢" if analysis.sentiment.polarity > 0 else "⚪"
+        icon = "🟢" if analysis.sentiment.polarity > 0 else ("🔴" if analysis.sentiment.polarity < 0 else "⚪")
         st.write(f"{icon} {entry.title}")
