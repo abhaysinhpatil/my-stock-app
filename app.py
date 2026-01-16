@@ -3,150 +3,145 @@ import yfinance as yf
 from prophet import Prophet
 from prophet.plot import plot_plotly
 from plotly import graph_objs as go
-from textblob import TextBlob
+from plotly.subplots import make_subplots
 import pandas as pd
-import feedparser # ताज्या बातम्यांसाठी
+import feedparser
+from textblob import TextBlob
 
-# १. सेटिंग्ज
-st.set_page_config(page_title="Pro AI Stock Analyst", layout="wide")
-st.title("📊 Pro AI Stock Analyst & News Tracker")
+# 1. Page Configuration
+st.set_page_config(page_title="Universal AI Stock Terminal V2", layout="wide")
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; color: white; }
+    .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# २. साईडबार - स्टॉक आणि इंडिकेटर्स निवडणे
-stocks = ("AAPL", "GOOG", "MSFT", "TSLA", "RELIANCE.NS", "TATASTEEL.NS")
-selected_stock = st.sidebar.selectbox("Select Stock", stocks)
-n_years = st.sidebar.slider("Prediction Years:", 1, 5)
+st.title("🛡 Pro AI Stock Terminal (Ultimate Edition)")
 
-# ३. डेटा लोड करणे
+# 2. Sidebar Search Logic
+st.sidebar.title("🔍 Search Stock")
+# अधिक भारतीय स्टॉक्सची यादी जोडली आहे
+common_stocks = [
+    "Select...", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ZOMATO.NS", 
+    "TATAMOTORS.NS", "SBIN.NS", "INFY.NS", "BAJFINANCE.NS", "AAPL", "TSLA"
+]
+selected_from_list = st.sidebar.selectbox("Quick Selection:", options=common_stocks)
+custom_ticker = st.sidebar.text_input("OR Type Ticker (e.g. MRF, TITAN):").upper()
+
+# Intelligent Ticker Logic
+if custom_ticker:
+    # जर युजरने .NS लावले नसेल तर भारतीय मार्केटसाठी ते स्वयंचलितपणे जोडले जाईल
+    if "." not in custom_ticker:
+        selected_stock = custom_ticker + ".NS"
+    else:
+        selected_stock = custom_ticker
+elif selected_from_list != "Select...":
+    selected_stock = selected_from_list
+else:
+    selected_stock = "RELIANCE.NS"
+
+n_years = st.sidebar.slider("Prediction Period (Years):", 1, 5)
+
+# 3. Enhanced Data Loading (With Stability Fix)
 @st.cache_data
 def load_data(ticker):
-    data = yf.download(ticker, start="2015-01-01")
-    data.reset_index(inplace=True)
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    return data
+    try:
+        # threads=False आणि auto_adjust=True मुळे भारतीय डेटा लोड होण्यास मदत होते
+        data = yf.download(ticker, start="2015-01-01", auto_adjust=True, threads=False)
+        if data.empty: return None
+        data.reset_index(inplace=True)
+        # MultiIndex कॉलम्स फिक्स करणे
+        if isinstance(data.columns, pd.MultiIndex): 
+            data.columns = data.columns.get_level_values(0)
+        return data
+    except Exception as e:
+        return None
 
 data = load_data(selected_stock)
 
-# ४. Technical Indicators (Moving Averages)
-# २० दिवसांची आणि ५० दिवसांची सरासरी काढणे
-data['MA20'] = data['Close'].rolling(window=20).mean()
-data['MA50'] = data['Close'].rolling(window=50).mean()
+if data is None:
+    st.error(f"❌ '{selected_stock}' सापडला नाही! कृपया Yahoo Finance वरील सिम्बॉल वापरा (उदा. TCS.NS, MRF.NS).")
+else:
+    # 4. Financial Metrics
+    ticker_obj = yf.Ticker(selected_stock)
+    info = ticker_obj.info
+    curr_price = float(data['Close'].iloc[-1])
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Current Price", f"{curr_price:.2f}")
+    col2.metric("Market Cap", f"{info.get('marketCap', 'N/A'):,.0f}")
+    col3.metric("P/E Ratio", info.get('trailingPE', 'N/A'))
+    col4.metric("Debt-to-Equity", info.get('debtToEquity', 'N/A'))
 
-# ५. Live News Section (Google News RSS)
-st.subheader(f"📰 Live News & Sentiment: {selected_stock}")
-rss_url = f"https://news.google.com/rss/search?q={selected_stock}+stock&hl=en-IN&gl=IN&ceid=IN:en"
-feed = feedparser.parse(rss_url)
+    # 5. Technical Signals
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    last_rsi = 100 - (100 / (1 + rs.iloc[-1]))
 
-col1, col2 = st.columns([2, 1])
+    st.divider()
+    st.subheader("🛠 AI Technical Analysis")
+    c1, c2 = st.columns(2)
+    with c1:
+        if last_rsi > 70:
+            st.error(f"🎯 SIGNAL: SELL (RSI: {last_rsi:.2f} - Overbought)")
+        elif last_rsi < 30:
+            st.success(f"🎯 SIGNAL: BUY (RSI: {last_rsi:.2f} - Oversold)")
+        else:
+            st.info(f"🎯 SIGNAL: HOLD (RSI: {last_rsi:.2f} - Neutral)")
+    with c2:
+        volatility = data['Close'].tail(30).pct_change().std() * 100
+        risk = "LOW" if volatility < 1.5 else "HIGH"
+        st.warning(f"⚠ Risk Assessment: {risk} ({volatility:.2f}%)")
 
-with col2:
-    st.write("Latest Headlines:")
-    for entry in feed.entries[:5]: # पहिल्या ५ बातम्या
-        sentiment = TextBlob(entry.title).sentiment.polarity
-        icon = "✅" if sentiment > 0 else "❌" if sentiment < 0 else "⚪"
-        st.write(f"{icon} [{entry.title}]({entry.link})")
+    # 6. Technical Chart (Price + EMA + Volume)
+    data['EMA50'] = data['Close'].ewm(span=50, adjust=False).mean()
+    data['EMA200'] = data['Close'].ewm(span=200, adjust=False).mean()
 
-# ६. ऐतिहासिक ग्राफ + Technical Indicators
-with col1:
-    fig = go.Figure()
-    clean_date = pd.to_datetime(data['Date']).dt.tz_localize(None)
-    fig.add_trace(go.Scatter(x=clean_date, y=data['Close'], name="Close Price", line=dict(color='white')))
-    fig.add_trace(go.Scatter(x=clean_date, y=data['MA20'], name="20 Day MA", line=dict(color='cyan', dash='dot')))
-    fig.add_trace(go.Scatter(x=clean_date, y=data['MA50'], name="50 Day MA", line=dict(color='magenta', dash='dot')))
-    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False)
+    st.divider()
+    st.subheader("📈 Pro Technical Chart")
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], name="Price", line=dict(color='#00d1ff')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['EMA50'], name="EMA 50", line=dict(color='yellow', width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['EMA200'], name="EMA 200", line=dict(color='orange', width=1.5)), row=1, col=1)
+    fig.add_trace(go.Bar(x=data['Date'], y=data['Volume'], name="Volume", marker_color='gray', opacity=0.4), row=2, col=1)
+    fig.update_layout(template="plotly_dark", height=600)
     st.plotly_chart(fig, use_container_width=True)
 
-# ७. AI Prediction (Prophet) - रेषा दाखवण्यासाठी सुधारित
-st.subheader('🚀 AI Price Forecast (Line View)')
+    # 7. AI Prediction
+    st.divider()
+    st.subheader(f"🚀 AI {n_years}-Year Forecast (Smart Seasonality)")
+    df_train = pd.DataFrame({'ds': pd.to_datetime(data['Date']).dt.tz_localize(None), 'y': data['Close']}).dropna()
+    m = Prophet(yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False)
+    m.fit(df_train)
+    future = m.make_future_dataframe(periods=n_years * 365)
+    forecast = m.predict(future)
+    st.plotly_chart(plot_plotly(m, forecast), use_container_width=True)
 
-# मॉडेल ट्रेनिंग आणि प्रेडिक्शन
-period = n_years * 365
-df_train = pd.DataFrame({'ds': pd.to_datetime(data['Date']).dt.tz_localize(None), 'y': data['Close']}).dropna()
-
-m = Prophet()
-m.fit(df_train)
-future = m.make_future_dataframe(periods=period)
-forecast = m.predict(future)
-
-# नवीन ग्राफ तयार करणे (डॉट्स काढून रेषा वापरण्यासाठी)
-fig_forecast = go.Figure()
-
-# १. खरा जुना डेटा (Actual Data) - आता रेषेच्या स्वरूपात
-fig_forecast.add_trace(go.Scatter(x=df_train['ds'], y=df_train['y'], name="Actual Price", line=dict(color='white', width=1)))
-
-# २. प्रेडिक्शन (Forecast) - मध्यवर्ती रेषा
-fig_forecast.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], name="Predicted Trend", line=dict(color='#00d1ff', width=2)))
-
-# ३. सावली (Confidence Interval) - अनिश्चितता दर्शवण्यासाठी
-fig_forecast.add_trace(go.Scatter(
-    x=pd.concat([forecast['ds'], forecast['ds'][::-1]]),
-    y=pd.concat([forecast['yhat_upper'], forecast['yhat_lower'][::-1]]),
-    fill='toself',
-    fillcolor='rgba(0, 209, 255, 0.2)',
-    line=dict(color='rgba(255,255,255,0)'),
-    hoverinfo="skip",
-    showlegend=False,
-    name='Uncertainty'
-))
-
-fig_forecast.update_layout(template="plotly_dark", xaxis_rangeslider_visible=True)
-st.plotly_chart(fig_forecast, use_container_width=True)
-
-# ८. Risk Meter (Volatility Analysis)
-st.subheader("⚠ Risk Assessment (Volatility)")
-
-# गेल्या ३० दिवसांच्या बदलावरून जोखीम मोजणे
-recent_data = data['Close'].tail(30)
-volatility = recent_data.pct_change().std() * 100 # Standard Deviation
-
-col_risk1, col_risk2 = st.columns(2)
-
-with col_risk1:
-    if volatility < 1.5:
-        st.success(f"Low Risk (Volatility: {volatility:.2f}%)")
-        st.write("हा स्टॉक सध्या स्थिर आहे आणि यात मोठी घसरण होण्याची शक्यता कमी दिसते.")
-    elif 1.5 <= volatility < 2.5:
-        st.warning(f"Medium Risk (Volatility: {volatility:.2f}%)")
-        st.write("यात मध्यम स्वरूपाची अस्थिरता आहे. गुंतवणूक करताना सावध राहा.")
+    # Verdict Box
+    forecast_val = float(forecast['yhat'].iloc[-1])
+    change_pct = ((forecast_val - curr_price) / curr_price) * 100
+    st.write("### 🎯 AI Forecast Verdict")
+    if change_pct > 0:
+        st.success(f"AI predicts a potential *{change_pct:.2f}% upside* in {n_years} years. (Target: {forecast_val:.2f})")
     else:
-        st.error(f"High Risk (Volatility: {volatility:.2f}%)")
-        st.write("हा स्टॉक अत्यंत अस्थिर आहे. यात पैसे गुंतवणे जोखमीचे ठरू शकते.")
+        st.warning(f"AI predicts a potential *{abs(change_pct):.2f}% downside* in {n_years} years. (Support: {forecast_val:.2f})")
 
-with col_risk2:
-    # एक साधा प्रोग्रेस बार जो मीटरसारखा दिसेल
-    st.write("Risk Level Visualization:")
-    risk_score = min(volatility * 20, 100) # Score out of 100
-    st.progress(int(risk_score))
-
-    # आधीचा कोड संपल्यानंतर इथे खाली पेस्ट करा...
-
-# --- न्यूज आधारित प्रेडिक्शन विभाग ---
-st.divider() # एक रेषा ओढण्यासाठी
-st.subheader(f"🧠 AI News-Based Analysis for {selected_stock}")
-
-def get_news_prediction(ticker):
-    # गुगल न्यूजवरून बातम्या शोधणे
-    rss_url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-IN&gl=IN&ceid=IN:en"
+    # 8. Sentiment Analysis
+    st.divider()
+    st.subheader("📰 Market Sentiment Analysis")
+    rss_url = f"https://news.google.com/rss/search?q={selected_stock}+stock&hl=en-IN"
     feed = feedparser.parse(rss_url)
+    sent_scores = []
+    for entry in feed.entries[:5]:
+        analysis = TextBlob(entry.title)
+        sentiment = "Positive" if analysis.sentiment.polarity > 0 else ("Negative" if analysis.sentiment.polarity < 0 else "Neutral")
+        icon = "🟢" if sentiment == "Positive" else ("🔴" if sentiment == "Negative" else "⚪")
+        st.write(f"{icon} {entry.title}")
+        sent_scores.append(analysis.sentiment.polarity)
     
-    total_score = 0
-    count = 0
-    
-    # पहिल्या १० बातम्यांचे विश्लेषण करणे
-    for entry in feed.entries[:10]:
-        analysis = TextBlob(entry.title).sentiment.polarity
-        total_score += analysis
-        count += 1
-    
-    avg_score = total_score / count if count > 0 else 0
-    return avg_score
-
-news_score = get_news_prediction(selected_stock)
-
-# रिझल्ट दाखवणे
-if news_score > 0.1:
-    st.success(f"🚀 POSITIVE TREND: बातम्यांनुसार या स्टॉकमध्ये वाढ होण्याची शक्यता आहे. (Sentiment Score: {news_score:.2f})")
-elif news_score < -0.1:
-    st.error(f"⚠ NEGATIVE TREND: बातम्या सध्या नकारात्मक आहेत, गुंतवणूक करताना काळजी घ्या. (Sentiment Score: {news_score:.2f})")
-else:
-    st.info(f"⚖ NEUTRAL: बातम्यांमध्ये कोणताही मोठा बदल दिसत नाही. (Sentiment Score: {news_score:.2f})")
+    if sent_scores:
+        avg_sent = sum(sent_scores)/len(sent_scores)
+        st.info(f"Overall Market Sentiment Score: *{avg_sent:.2f}* (-1 to 1)")
