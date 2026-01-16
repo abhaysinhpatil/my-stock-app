@@ -2,6 +2,6 @@ streamlit
 yfinance
 prophet
 plotly
-textblob
-feedparser
 pandas
+feedparser
+textblob
