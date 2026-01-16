@@ -62,7 +62,10 @@ def load_dynamic_data(ticker, interval):
         return data
     except: return None
 
-data = load_dynamic_data(selected_stock, time_interval)
+# --- या ओळीच्या जागी (Step 3 शोधून) ---
+with st.spinner(f"Fetching latest data for {selected_stock}..."):
+    data = load_dynamic_data(selected_stock, time_interval)
+# -----------------------------------
 
 if data is not None:
     # 4. Key Metrics
@@ -138,6 +141,7 @@ if data is not None:
                 low=data['Low'], close=data['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Bar(x=data[data.columns[0]], y=data['Volume'], name="Volume", marker_color='#e0e3eb'), row=2, col=1)
     fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_white", height=500, showlegend=False)
+    
     st.plotly_chart(fig, use_container_width=True)
 
     # 7. Intraday Analysis (VWAP)
